@@ -1,0 +1,139 @@
+[
+  {
+    "id": "case_01",
+    "level": "beginner",
+    "category": "chess_rules",
+    "input": {
+      "user_message": "Як ходить кінь у шахах?",
+      "engine_analysis": null
+    },
+    "expected_behavior": [
+      "Пояснити, що кінь ходить літерою Г.",
+      "Пояснити, що кінь може перестрибувати через інші фігури.",
+      "Використовувати прості та зрозумілі слова."
+    ]
+  },
+  {
+    "id": "case_02",
+    "level": "beginner",
+    "category": "move_explanation",
+    "input": {
+      "user_message": "Чому я не можу перемістити пішака назад?",
+      "engine_analysis": null
+    },
+    "expected_behavior": [
+      "Пояснити напрямок руху пішака.",
+      "Пояснити, що звичайний пішак не може рухатися назад.",
+      "Не використовувати складну шахову термінологію без пояснення."
+    ]
+  },
+  {
+    "id": "case_03",
+    "level": "intermediate",
+    "category": "best_move",
+    "input": {
+      "user_message": "Чому цей хід вважається найкращим?",
+      "engine_analysis": {
+        "best_move": "Nf3",
+        "evaluation": "+0.8",
+        "depth": 15
+      }
+    },
+    "expected_behavior": [
+      "Пояснити переданий шаховим рушієм найкращий хід.",
+      "Пояснити значення оцінки позиції.",
+      "Не вигадувати додаткові результати аналізу."
+    ]
+  },
+  {
+    "id": "case_04",
+    "level": "intermediate",
+    "category": "mistake_explanation",
+    "input": {
+      "user_message": "Поясни мою помилку.",
+      "engine_analysis": {
+        "played_move": "Qh5",
+        "best_move": "Nf3",
+        "classification": "mistake",
+        "evaluation_before": "+1.2",
+        "evaluation_after": "-0.5"
+      }
+    },
+    "expected_behavior": [
+      "Пояснити, що зіграний хід оцінений як помилка.",
+      "Порівняти зіграний хід із найкращим ходом.",
+      "Пояснити зміну оцінки позиції.",
+      "Не стверджувати про конкретну тактичну загрозу, якщо її немає в результатах аналізу."
+    ]
+  },
+  {
+    "id": "case_05",
+    "level": "advanced",
+    "category": "position_analysis",
+    "input": {
+      "user_message": "Проаналізуй цю позицію та поясни найкраще продовження.",
+      "engine_analysis": {
+        "best_move": "Nf3",
+        "evaluation": "+1.5",
+        "depth": 20,
+        "principal_variation": ["Nf3", "d5", "d4"]
+      }
+    },
+    "expected_behavior": [
+      "Надати більш детальне пояснення позиції.",
+      "Пояснити значення найкращого ходу.",
+      "Розглянути передану послідовність продовження.",
+      "Використовувати шахову термінологію."
+    ]
+  },
+  {
+    "id": "case_06",
+    "level": "beginner",
+    "category": "hint",
+    "input": {
+      "user_message": "Підкажи, який хід мені зробити.",
+      "engine_analysis": {
+        "best_move": "Nf3",
+        "evaluation": "+0.4",
+        "depth": 12
+      }
+    },
+    "expected_behavior": [
+      "Запропонувати хід, отриманий від Stockfish.",
+      "Пояснити рекомендацію простими словами.",
+      "Не робити хід замість користувача."
+    ]
+  },
+  {
+    "id": "case_07",
+    "level": "advanced",
+    "category": "missing_analysis",
+    "input": {
+      "user_message": "Який найкращий хід у цій позиції?",
+      "engine_analysis": null
+    },
+    "expected_behavior": [
+      "Не вигадувати найкращий хід.",
+      "Повідомити, що для відповіді потрібен аналіз шахового рушія.",
+      "Попросити виконати аналіз або надати дані позиції."
+    ]
+  },
+  {
+    "id": "case_08",
+    "level": "intermediate",
+    "category": "api_error",
+    "input": {
+      "user_message": "Поясни, чому цей хід хороший.",
+      "engine_analysis": {
+        "best_move": "Nf3",
+        "evaluation": "+0.7"
+      },
+      "language_model_status": "unavailable"
+    },
+    "expected_behavior": [
+      "Не повідомляти про неіснуючу відповідь мовної моделі.",
+      "Повідомити про тимчасову недоступність AI-помічника.",
+      "Не втрачати результати шахового аналізу."
+    ]
+  }
+]
