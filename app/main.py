@@ -17,7 +17,9 @@ from app.providers.errors import (
     ProviderRateLimitError,
     ProviderUnavailableError,
     ProviderInvalidResponseError,
-    ProviderStreamError
+    ProviderStreamError,
+    ProviderBudgetExceededError,
+    ProviderAuthenticationError
 )
 
 
@@ -193,6 +195,47 @@ async def handle_stream_error(request: Request, exc: ProviderStreamError):
                 "kind": "stream_interrupted",
                 "message": str(exc),
                 "retryable": exc.retryable,
+                "request_id": request_id
+            }
+        },
+        headers={"X-Request-ID": request_id}
+    )
+
+@app.exception_handler(ProviderBudgetExceededError)
+async def handle_budget_exceeded(
+    request: Request,
+    exc: ProviderBudgetExceededError
+):
+    request_id = request.state.request_id
+
+    return JSONResponse(
+        status_code=429,
+        content={
+            "error": {
+                "kind": "budget_exceeded",
+                "message": str(exc),
+                "retryable": False,
+                "request_id": request_id
+            }
+        },
+        headers={"X-Request-ID": request_id}
+    )
+
+
+@app.exception_handler(ProviderAuthenticationError)
+async def handle_authentication_error(
+    request: Request,
+    exc: ProviderAuthenticationError
+):
+    request_id = request.state.request_id
+
+    return JSONResponse(
+        status_code=401,
+        content={
+            "error": {
+                "kind": "authentication_error",
+                "message": "Помилка автентифікації AI-провайдера.",
+                "retryable": False,
                 "request_id": request_id
             }
         },

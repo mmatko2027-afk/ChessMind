@@ -1,0 +1,9 @@
+{
+    "output": {
+        "answer": "Кінь ходить літерою Г: на два поля в одному напрямку і на одне поле вбік.",
+        "suggestion": "Спробуйте знайти поле для ходу конем.",
+        "has_enough_data": true,
+        "missing_information": []
+    },
+    "model": "chessmind-mock"
+}

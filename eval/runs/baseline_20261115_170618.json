@@ -1,0 +1,200 @@
+{
+    "created_at": "2026-11-15T17:06:18.029825",
+    "repeats": 2,
+    "total": 16,
+    "passed": 14,
+    "failed": 2,
+    "accuracy_percent": 87.5,
+    "summary_by_kind": {
+        "basic_rule": {
+            "total": 12,
+            "passed": 12
+        },
+        "insufficient_data": {
+            "total": 2,
+            "passed": 2
+        },
+        "concept": {
+            "total": 2,
+            "passed": 0
+        }
+    },
+    "results": [
+        {
+            "case_id": "case_001",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "question": "Як ходить кінь?",
+            "answer": "Кінь ходить літерою Г: на два поля в одному напрямку і на одне поле вбік.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.024
+        },
+        {
+            "case_id": "case_001",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "question": "Як ходить кінь?",
+            "answer": "Кінь ходить літерою Г: на два поля в одному напрямку і на одне поле вбік.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.022
+        },
+        {
+            "case_id": "case_002",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "question": "Як ходить тура?",
+            "answer": "Тура рухається по горизонталі та вертикалі на будь-яку кількість вільних полів.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.023
+        },
+        {
+            "case_id": "case_002",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "question": "Як ходить тура?",
+            "answer": "Тура рухається по горизонталі та вертикалі на будь-яку кількість вільних полів.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.023
+        },
+        {
+            "case_id": "case_003",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "question": "Як ходить слон?",
+            "answer": "Слон рухається по діагоналі на будь-яку кількість вільних полів.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.024
+        },
+        {
+            "case_id": "case_003",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "question": "Як ходить слон?",
+            "answer": "Слон рухається по діагоналі на будь-яку кількість вільних полів.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.025
+        },
+        {
+            "case_id": "case_004",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "question": "Як ходить ферзь?",
+            "answer": "Ферзь рухається по горизонталі, вертикалі та діагоналі на будь-яку кількість вільних полів.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.026
+        },
+        {
+            "case_id": "case_004",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "question": "Як ходить ферзь?",
+            "answer": "Ферзь рухається по горизонталі, вертикалі та діагоналі на будь-яку кількість вільних полів.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.024
+        },
+        {
+            "case_id": "case_005",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "question": "Як ходить король?",
+            "answer": "Король рухається на одне поле в будь-якому напрямку.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.029
+        },
+        {
+            "case_id": "case_005",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "question": "Як ходить король?",
+            "answer": "Король рухається на одне поле в будь-якому напрямку.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.026
+        },
+        {
+            "case_id": "case_006",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "question": "Як рухається пішак?",
+            "answer": "Пішак рухається вперед на одне поле, а з початкової позиції може зробити два кроки.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.027
+        },
+        {
+            "case_id": "case_006",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "question": "Як рухається пішак?",
+            "answer": "Пішак рухається вперед на одне поле, а з початкової позиції може зробити два кроки.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.03
+        },
+        {
+            "case_id": "case_007",
+            "kind": "insufficient_data",
+            "repeat": 1,
+            "question": "Так",
+            "answer": "Мені недостатньо інформації для відповіді.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.03
+        },
+        {
+            "case_id": "case_007",
+            "kind": "insufficient_data",
+            "repeat": 2,
+            "question": "Так",
+            "answer": "Мені недостатньо інформації для відповіді.",
+            "keywords_ok": true,
+            "enough_data_ok": true,
+            "passed": true,
+            "latency_s": 0.029
+        },
+        {
+            "case_id": "case_008",
+            "kind": "concept",
+            "repeat": 1,
+            "question": "Що означає шах?",
+            "answer": "Шах — це напад на короля суперника. Гравець повинен захистити короля, перемістити його або усунути загрозу.",
+            "keywords_ok": false,
+            "enough_data_ok": true,
+            "passed": false,
+            "latency_s": 0.029
+        },
+        {
+            "case_id": "case_008",
+            "kind": "concept",
+            "repeat": 2,
+            "question": "Що означає шах?",
+            "answer": "Шах — це напад на короля суперника. Гравець повинен захистити короля, перемістити його або усунути загрозу.",
+            "keywords_ok": false,
+            "enough_data_ok": true,
+            "passed": false,
+            "latency_s": 0.025
+        }
+    ]
+}

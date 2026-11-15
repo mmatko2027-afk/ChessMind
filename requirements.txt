@@ -6,3 +6,4 @@ python-dotenv
 python-chess
 pytest
 httpx
+openai>=1.40

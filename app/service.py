@@ -39,7 +39,9 @@ class ChessService:
         response = CoachResponse(
             answer=result["answer"],
             suggestion=result["suggestion"],
-            request_id=result["request_id"]
+            request_id=result["request_id"],
+            has_enough_data=result["has_enough_data"],
+            missing_information=result["missing_information"]
         )
 
         return response

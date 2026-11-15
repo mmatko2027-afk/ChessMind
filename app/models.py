@@ -29,11 +29,19 @@ class CoachResponse(BaseModel):
     answer: str
     suggestion: str
     request_id: str
+    has_enough_data: bool = True
+    missing_information: list[str] = Field(default_factory=list)
 
 
 class CoachStructuredOutput(BaseModel):
     answer: str = Field(min_length=1)
     suggestion: str = Field(min_length=1)
+    has_enough_data: bool
+    missing_information: list[str]
+
+    model_config = {
+        "extra": "forbid"
+    }
 
 
 class ProviderRequest(BaseModel):
@@ -46,6 +54,11 @@ class ProviderResult(BaseModel):
     output: CoachStructuredOutput
     provider: str
     model: str
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cost: float = 0.0
 
 
 class ErrorDetail(BaseModel):

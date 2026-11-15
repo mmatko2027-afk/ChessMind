@@ -1,0 +1,136 @@
+{
+    "created_at": "2026-11-15T18:09:05.435464",
+    "repeats": 2,
+    "total": 16,
+    "passed": 0,
+    "failed": 16,
+    "accuracy_percent": 0.0,
+    "summary_by_kind": {
+        "basic_rule": {
+            "total": 12,
+            "passed": 0
+        },
+        "insufficient_data": {
+            "total": 2,
+            "passed": 0
+        },
+        "concept": {
+            "total": 2,
+            "passed": 0
+        }
+    },
+    "results": [
+        {
+            "case_id": "case_001",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_001",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_002",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_002",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_003",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_003",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_004",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_004",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_005",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_005",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_006",
+            "kind": "basic_rule",
+            "repeat": 1,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_006",
+            "kind": "basic_rule",
+            "repeat": 2,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_007",
+            "kind": "insufficient_data",
+            "repeat": 1,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_007",
+            "kind": "insufficient_data",
+            "repeat": 2,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_008",
+            "kind": "concept",
+            "repeat": 1,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        },
+        {
+            "case_id": "case_008",
+            "kind": "concept",
+            "repeat": 2,
+            "passed": false,
+            "error": "Перевищено денний ліміт AI-запитів."
+        }
+    ]
+}

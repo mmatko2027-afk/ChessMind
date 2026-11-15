@@ -1,45 +1,67 @@
 
 [
     {
-        "id": 1,
+        "id": "case_001",
+        "kind": "basic_rule",
         "question": "Як ходить кінь?",
-        "position": "current",
-        "expected_topic": "Рух коня"
+        "position": "",
+        "expected_keywords": ["літерою Г", "два поля"],
+        "expected_enough_data": true
     },
     {
-        "id": 2,
-        "question": "Як ходить пішак?",
-        "position": "current",
-        "expected_topic": "Рух пішака"
-    },
-    {
-        "id": 3,
-        "question": "Як рухається король?",
-        "position": "current",
-        "expected_topic": "Рух короля"
-    },
-    {
-        "id": 4,
+        "id": "case_002",
+        "kind": "basic_rule",
         "question": "Як ходить тура?",
-        "position": "current",
-        "expected_topic": "Рух тури"
+        "position": "",
+        "expected_keywords": ["горизонталі", "вертикалі"],
+        "expected_enough_data": true
     },
     {
-        "id": 5,
-        "question": "Що таке шах?",
-        "position": "current",
-        "expected_topic": "Шах"
-    },
-    {
-        "id": 6,
-        "question": "Що таке мат?",
-        "position": "current",
-        "expected_topic": "Мат"
-    },
-    {
-        "id": 7,
+        "id": "case_003",
+        "kind": "basic_rule",
         "question": "Як ходить слон?",
-        "position": "current",
-        "expected_topic": "Рух слона"
+        "position": "",
+        "expected_keywords": ["діагоналі"],
+        "expected_enough_data": true
+    },
+    {
+        "id": "case_004",
+        "kind": "basic_rule",
+        "question": "Як ходить ферзь?",
+        "position": "",
+        "expected_keywords": ["горизонталі", "вертикалі", "діагоналі"],
+        "expected_enough_data": true
+    },
+    {
+        "id": "case_005",
+        "kind": "basic_rule",
+        "question": "Як ходить король?",
+        "position": "",
+        "expected_keywords": ["одне поле"],
+        "expected_enough_data": true
+    },
+    {
+        "id": "case_006",
+        "kind": "basic_rule",
+        "question": "Як рухається пішак?",
+        "position": "",
+        "expected_keywords": ["вперед"],
+        "expected_enough_data": true
+    },
+    {
+        "id": "case_007",
+        "kind": "insufficient_data",
+        "question": "Так",
+        "position": "",
+        "expected_keywords": ["недостатньо інформації"],
+        "expected_enough_data": false
+    },
+    {
+        "id": "case_008",
+        "kind": "concept",
+        "question": "Що означає шах?",
+        "position": "",
+        "expected_keywords": ["король", "атак"],
+        "expected_enough_data": true
     }
 ]
