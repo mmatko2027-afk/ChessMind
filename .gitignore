@@ -1,17 +1,24 @@
-# Python
+
+# Environment variables
+.env
+
+# Python cache
 __pycache__/
 *.py[cod]
-.venv/
-venv/
+.pytest_cache/
 
-# IDE and OS
+# Virtual environment
+venv/
+.venv/
+
+# Local database
+data/
+*.db
+
+# Logs
+logs/
+*.log
+
+# IDE settings
 .vscode/
 .idea/
-.vs/
-.DS_Store
-Thumbs.db
-
-# Secrets
-.env
-.env.*
-!.env.example
