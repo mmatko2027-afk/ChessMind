@@ -2,6 +2,7 @@
 import json
 import logging
 
+from click import prompt
 from google import genai
 from google.genai import types
 from pydantic import ValidationError
@@ -28,13 +29,27 @@ logger = logging.getLogger("chessmind")
 class GeminiNativeProvider(AIProvider):
 
     def __init__(self):
-        self.client = genai.Client(api_key=settings.llm_api_key)
+        self.client = genai.Client(
+            api_key=settings.llm_api_key,
+            http_options=types.HttpOptions(
+                timeout=settings.llm_timeout_s * 1000
+            ),
+        )
 
     def explain(self, request: ProviderRequest) -> ProviderResult:
-
-        prompt = build_context(
-            position=request.position,
-            question=request.question
+        ...
+        coach_schema = types.Schema(
+            type=types.Type.OBJECT,
+            properties={
+                "answer": types.Schema(type=types.Type.STRING),
+                "suggestion": types.Schema(type=types.Type.STRING),
+                "has_enough_data": types.Schema(type=types.Type.BOOLEAN),
+                "missing_information": types.Schema(
+                    type=types.Type.ARRAY,
+                    items=types.Schema(type=types.Type.STRING),
+                ),
+            },
+            required=["answer", "suggestion", "has_enough_data", "missing_information"],
         )
 
         try:
@@ -43,7 +58,7 @@ class GeminiNativeProvider(AIProvider):
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=CoachStructuredOutput,
+                    response_schema=coach_schema,
                     max_output_tokens=settings.llm_max_tokens,
                 ),
             )

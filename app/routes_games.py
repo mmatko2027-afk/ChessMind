@@ -503,6 +503,7 @@ def clear_telemetry_logs():
     return {"cleared": True, **get_telemetry_logs()}
 
 
+
 @router.get("/api/telemetry/stream")
 async def stream_telemetry():
     queue: asyncio.Queue = asyncio.Queue()
@@ -510,10 +511,28 @@ async def stream_telemetry():
 
     async def event_gen():
         try:
+            yield ": connected\n\n"
+
             while True:
-                item = await queue.get()
-                yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+                try:
+                    item = await asyncio.wait_for(
+                        queue.get(),
+                        timeout=15.0,
+                    )
+
+                    yield f"data: {json.dumps(item, ensure_ascii=False)}\n\n"
+
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"
+
         finally:
             SSE_QUEUES.discard(queue)
 
-    return StreamingResponse(event_gen(), media_type="text/event-stream")
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

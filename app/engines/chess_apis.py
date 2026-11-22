@@ -5,11 +5,17 @@ import random
 import chess
 import httpx
 
-
+_HTTP_CLIENT = httpx.AsyncClient(
+    timeout=httpx.Timeout(1.8, connect=1.0),
+    limits=httpx.Limits(
+        max_connections=20,
+        max_keepalive_connections=10,
+    ),
+)
 async def query_stockfish_api(fen: str, depth: int = 10) -> dict:
 
     try:
-        async with httpx.AsyncClient(timeout=3.5) as client:
+        async with _HTTP_CLIENT as client:
             res = await client.get(
                 "https://stockfish.online/api/s/v2.php",
                 params={"fen": fen, "depth": depth},
@@ -38,7 +44,7 @@ async def query_stockfish_api(fen: str, depth: int = 10) -> dict:
         pass
 
     try:
-        async with httpx.AsyncClient(timeout=3.5) as client:
+        async with _HTTP_CLIENT as client:
             res = await client.post(
                 "https://chess-api.com/v1",
                 json={"fen": fen, "depth": depth},
@@ -95,7 +101,7 @@ async def query_maia_move(
     source = f"maia-{elo}-policy"
 
     try:
-        async with httpx.AsyncClient(timeout=2.8) as client:
+        async with _HTTP_CLIENT as client:
             res = await client.get(
                 "https://lichess.org/api/cloud-eval",
                 params={"fen": fen, "multiPv": 5},
