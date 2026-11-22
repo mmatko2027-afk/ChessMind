@@ -1,5 +1,5 @@
 
-from pydantic import Field, model_validator
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -11,7 +11,13 @@ class Settings(BaseSettings):
     # AI provider settings
     llm_provider: str = "mock"
     llm_model: str = "chessmind-mock"
-    llm_api_key: str = ""
+    llm_api_key: str = Field(
+    default="",
+    validation_alias=AliasChoices(
+        "LLM_API_KEY",
+        "GEMINI_API_KEY"
+    )
+)
     llm_base_url: str = "https://generativelanguage.googleapis.com/v1beta/openai/"
     llm_timeout_s: int = Field(default=20, gt=0)
     llm_temperature: float = Field(default=0.2, ge=0, le=2)
@@ -40,7 +46,8 @@ class Settings(BaseSettings):
         allowed_providers = [
             "mock",
             "recorded",
-            "openai_compat"
+            "openai_compat",
+            "gemini"
         ]
 
         if self.llm_provider not in allowed_providers:
@@ -70,9 +77,9 @@ class Settings(BaseSettings):
                 "Invalid MOCK_FAILURE_MODE value."
             )
 
-        if self.llm_provider == "openai_compat" and not self.llm_api_key:
+        if self.llm_provider in ("openai_compat", "gemini") and not self.llm_api_key:
             raise ValueError(
-                "LLM_API_KEY is required for openai_compat provider."
+                "LLM_API_KEY or GEMINI_API_KEY is required for live provider."
             )
 
         return self

@@ -4,6 +4,7 @@ import { ChessBoard3D } from './components/chess3d/ChessBoard3D';
 import { CoachPanel } from './components/panels/CoachPanel';
 import { TelemetryPanel } from './components/panels/TelemetryPanel';
 import { ApiExplorerPanel } from './components/panels/ApiExplorerPanel';
+import { useGameWebSocket } from './hooks/useGameWebSocket';
 import type {
   AiUsageMetrics,
   AnalysisJobResponse,
@@ -57,7 +58,41 @@ export default function App() {
   const [selectedStarter, setSelectedStarter] = useState<StarterMode>('random');
   const [creatingGame, setCreatingGame] = useState(false);
 
+  
+
   const [game, setGame] = useState<GameStateResponse | null>(null);
+
+  const { wsConnected, sendMove } = useGameWebSocket({
+  gameId: game?.game_id ?? null,
+
+  onGameState: useCallback((nextState) => {
+    setGame((prev) => {
+      if (
+        prev &&
+        prev.game_id === nextState.game_id &&
+        nextState.moves.length < prev.moves.length
+      ) {
+        return prev;
+      }
+
+      return nextState;
+    });
+
+    setMoveBusy(false);
+  }, []),
+
+  onError: useCallback(
+    (err) => {
+      setMoveBusy(false);
+
+      showNotice(
+        'error',
+        `${err.message} (request_id=${err.request_id.slice(0, 8)})`
+      );
+    },
+    [showNotice],
+  ),
+});
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [moveBusy, setMoveBusy] = useState(false);
   const [evalLoading, setEvalLoading] = useState(false);
@@ -250,28 +285,40 @@ export default function App() {
   };
 
   const handleAttemptMove = useCallback(
-    async (from: string, to: string, promotion?: string) => {
-      if (!game || moveBusy) return;
-      setMoveBusy(true);
-      const uci = `${from}${to}${promotion ?? ''}`;
-      try {
-        const res = await callApi<MoveResponse | ErrorResponse>(
-          'POST',
-          `/api/games/${game.game_id}/moves`,
-          { move: uci },
+  async (from: string, to: string, promotion?: string) => {
+    if (!game || moveBusy) return;
+
+    setMoveBusy(true);
+
+    const uci = `${from}${to}${promotion ?? ''}`;
+
+    if (wsConnected && sendMove(uci)) {
+      return;
+    }
+
+    try {
+      const res = await callApi<MoveResponse | ErrorResponse>(
+        'POST',
+        `/api/games/${game.game_id}/moves`,
+        { move: uci },
+      );
+
+      if (res.ok) {
+        setGame(res.data as MoveResponse);
+      } else {
+        const err = res.data as ErrorResponse;
+
+        showNotice(
+          'error',
+          `${err.error.message} (request_id=${err.error.request_id.slice(0, 8)})`
         );
-        if (res.ok) {
-          setGame(res.data as MoveResponse);
-        } else {
-          const err = res.data as ErrorResponse;
-          showNotice('error', `${err.error.message} (request_id=${err.error.request_id.slice(0, 8)})`);
-        }
-      } finally {
-        setMoveBusy(false);
       }
-    },
-    [game, moveBusy, callApi, showNotice],
-  );
+    } finally {
+      setMoveBusy(false);
+    }
+  },
+  [game, moveBusy, wsConnected, sendMove, callApi, showNotice],
+);
 
   const handleEvaluateStockfish = useCallback(async () => {
     if (!game || evalLoading) return;

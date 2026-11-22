@@ -7,3 +7,4 @@ python-chess
 pytest
 httpx
 openai>=1.40
+google-genai>=1.0.0

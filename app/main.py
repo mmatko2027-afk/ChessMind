@@ -1,4 +1,3 @@
-
 import logging
 import time
 import uuid
@@ -11,7 +10,7 @@ from app.models import CoachRequest, CoachResponse
 from app.service import ChessService
 from app.storage import ChessStorage
 from app.telemetry import setup_logging, RequestIdFilter
-
+from app.routes_games import router as games_router
 from app.providers.errors import (
     ProviderTimeoutError,
     ProviderRateLimitError,
@@ -29,7 +28,7 @@ app = FastAPI(
     title=settings.app_name,
     version=settings.app_version
 )
-
+app.include_router(games_router)
 setup_logging()
 
 logger = logging.getLogger("chessmind")

@@ -207,3 +207,12 @@ export interface ApiExchangeLog {
   request_body: unknown;
   response_body: unknown;
 }
+
+export type WsClientMessage =
+  | { type: 'subscribe'; game_id: string }
+  | { type: 'make_move'; move: string };
+
+export type WsServerMessage =
+  | { type: 'game_state'; payload: GameStateResponse }
+  | { type: 'move_applied'; payload: MoveResponse }
+  | { type: 'error'; payload: ErrorResponse['error'] };

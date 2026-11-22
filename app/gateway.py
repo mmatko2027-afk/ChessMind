@@ -1,4 +1,3 @@
-
 import logging
 
 from app.storage import ChessStorage
@@ -9,7 +8,7 @@ from app.providers.mock import MockAIProvider
 from app.providers.openai_compat import OpenAICompatibleProvider
 from app.providers.errors import ProviderUnavailableError
 from app.providers.recorded import RecordedAIProvider
-
+from app.providers.gemini_native import GeminiNativeProvider
 
 logger = logging.getLogger("chessmind")
 
