@@ -1,0 +1,6 @@
+{
+  "name": "ChessMind 3D & Telemetry",
+  "description": "Interactive 3D chess client, AI chess coach, and live telemetry.py API studio for ChessMind.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

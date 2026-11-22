@@ -22,6 +22,13 @@ from app.providers.errors import (
     ProviderAuthenticationError
 )
 
+import os
+from fastapi.staticfiles import StaticFiles
+
+app = FastAPI(
+    title=settings.app_name,
+    version=settings.app_version
+)
 
 setup_logging()
 
@@ -31,10 +38,6 @@ for handler in logging.getLogger().handlers:
     handler.addFilter(RequestIdFilter())
 
 
-app = FastAPI(
-    title=settings.app_name,
-    version=settings.app_version
-)
 
 service = ChessService()
 storage = ChessStorage()
@@ -240,4 +243,17 @@ async def handle_authentication_error(
             }
         },
         headers={"X-Request-ID": request_id}
+    )
+
+frontend_dist = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "frontend",
+    "dist"
+)
+
+if os.path.isdir(frontend_dist):
+    app.mount(
+        "/",
+        StaticFiles(directory=frontend_dist, html=True),
+        name="frontend"
     )

@@ -22,3 +22,17 @@ logs/
 # IDE settings
 .vscode/
 .idea/
+
+
+# Dependencies
+/frontend/node_modules/
+
+# Build files
+/frontend/dist/
+
+# Environment variables
+.env
+.env.local
+
+# Logs
+*.log
