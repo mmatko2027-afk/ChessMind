@@ -210,6 +210,7 @@ export interface ApiExchangeLog {
 
 export type WsClientMessage =
   | { type: 'subscribe'; game_id: string }
+  | { type: 'sync' }
   | { type: 'make_move'; move: string };
 
 export type WsServerMessage =

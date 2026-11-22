@@ -32,6 +32,9 @@ class AIGateway:
         if provider_name == "openai_compat":
             return OpenAICompatibleProvider()
 
+        if provider_name == "gemini":
+            return GeminiNativeProvider()
+
         raise ProviderUnavailableError(
             f"Unsupported AI provider: {provider_name}",
             retryable=False

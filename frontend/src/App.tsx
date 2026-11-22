@@ -5,6 +5,7 @@ import { CoachPanel } from './components/panels/CoachPanel';
 import { TelemetryPanel } from './components/panels/TelemetryPanel';
 import { ApiExplorerPanel } from './components/panels/ApiExplorerPanel';
 import { useGameWebSocket } from './hooks/useGameWebSocket';
+
 import type {
   AiUsageMetrics,
   AnalysisJobResponse,
@@ -61,65 +62,41 @@ export default function App() {
   
 
   const [game, setGame] = useState<GameStateResponse | null>(null);
-
-  const { wsConnected, sendMove } = useGameWebSocket({
-  gameId: game?.game_id ?? null,
-
-  onGameState: useCallback((nextState) => {
-    setGame((prev) => {
-      if (
-        prev &&
-        prev.game_id === nextState.game_id &&
-        nextState.moves.length < prev.moves.length
-      ) {
-        return prev;
-      }
-
-      return nextState;
-    });
-
-    setMoveBusy(false);
-  }, []),
-
-  onError: useCallback(
-    (err) => {
-      setMoveBusy(false);
-
-      showNotice(
-        'error',
-        `${err.message} (request_id=${err.request_id.slice(0, 8)})`
-      );
-    },
-    [showNotice],
-  ),
-});
-  const [health, setHealth] = useState<HealthResponse | null>(null);
-  const [moveBusy, setMoveBusy] = useState(false);
-  const [evalLoading, setEvalLoading] = useState(false);
-
-  const [coachResponse, setCoachResponse] = useState<CoachResponse | null>(null);
-  const [coachError, setCoachError] = useState<ErrorResponse | null>(null);
-  const [coachLoading, setCoachLoading] = useState(false);
-
-  const [analysisJob, setAnalysisJob] = useState<AnalysisJobResponse | null>(null);
-  const [analysisLoading, setAnalysisLoading] = useState(false);
-
-  const [logs, setLogs] = useState<TelemetryLogEntry[]>([]);
-  const [usage, setUsage] = useState<AiUsageMetrics>(DEFAULT_USAGE);
-  const [sseConnected, setSseConnected] = useState(false);
-  const [filterRequestId, setFilterRequestId] = useState('');
-
-  const [exchanges, setExchanges] = useState<ApiExchangeLog[]>([]);
   const [bannerNotice, setBannerNotice] = useState<{
     kind: 'error' | 'info';
     text: string;
   } | null>(null);
 
-  const initDoneRef = useRef(false);
-
   const showNotice = useCallback((kind: 'error' | 'info', text: string) => {
     setBannerNotice({ kind, text });
   }, []);
+
+  const { wsConnected, sendMove } = useGameWebSocket({
+    gameId: game?.game_id ?? null,
+    onGameState: useCallback((nextState) => {
+      setGame((prev) => {
+        if (
+          prev &&
+          prev.game_id === nextState.game_id &&
+          nextState.moves.length < prev.moves.length
+        ) {
+          return prev;
+        }
+        return nextState;
+      });
+      setMoveBusy(false);
+    }, []),
+    onError: useCallback(
+      (err) => {
+        setMoveBusy(false);
+        showNotice(
+          'error',
+          `${err.message} (request_id=${err.request_id.slice(0, 8)})`,
+        );
+      },
+      [showNotice],
+    ),
+  });
 
   useEffect(() => {
     if (!bannerNotice) return;
