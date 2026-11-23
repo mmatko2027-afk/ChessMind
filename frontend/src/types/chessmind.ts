@@ -2,22 +2,21 @@ export type GameLevel = 'beginner' | 'intermediate' | 'advanced';
 export type GameOpponent = 'stockfish' | 'maia' | 'human';
 export type StarterMode = 'random' | 'white' | 'black';
 export type TurnColor = 'white' | 'black';
+export type MoveQuality = 'best' | 'good' | 'inaccuracy' | 'mistake' | 'blunder';
 
 export interface UserSession {
   user_id: string;
   username: string;
   email?: string;
+  is_admin: boolean;
+  adaptive_elo: number;
   created_at: string;
   games_played: number;
 }
 
 export interface GameCreateRequest {
   level: GameLevel;
-  opponent: GameOpponent;
-  starter_mode: StarterMode;
-  assistant_position: 'right' | 'left' | 'bottom';
-  assistant_appearance: string;
-  voice_enabled: boolean;
+  starter_mode?: StarterMode;
 }
 
 export interface MoveRecord {
@@ -32,6 +31,21 @@ export interface MoveRecord {
   fen: string;
   timestamp: string;
   engine?: string;
+  eval_cp?: number | null;
+  mate?: number | null;
+  bestmove?: string | null;
+  quality?: MoveQuality;
+  cp_loss?: number;
+  mistake_note?: string | null;
+}
+
+export interface LiveMoveFeedback {
+  ply: number;
+  move: string;
+  quality: MoveQuality;
+  cp_loss: number;
+  bestmove: string | null;
+  note: string;
 }
 
 export interface EngineEvalSnapshot {
@@ -47,6 +61,8 @@ export interface GameStateResponse {
   status: 'active' | 'checkmate' | 'stalemate' | 'draw';
   level: GameLevel;
   opponent: GameOpponent;
+  engine_label?: string;
+  adaptive_elo?: number;
   player_color: TurnColor;
   starter_mode: StarterMode;
   starter_note: string;
@@ -63,6 +79,7 @@ export interface GameStateResponse {
   };
   last_move: { from: string; to: string } | null;
   engine_eval?: EngineEvalSnapshot | null;
+  last_player_feedback?: LiveMoveFeedback | null;
 }
 
 export interface MoveResponse extends GameStateResponse {
@@ -71,10 +88,29 @@ export interface MoveResponse extends GameStateResponse {
   computer_engine?: string | null;
 }
 
+export interface GameHistoryItem {
+  game_id: string;
+  owner_id: string;
+  username: string;
+  level: GameLevel;
+  status: 'active' | 'checkmate' | 'stalemate' | 'draw';
+  winner: TurnColor | 'draw' | null;
+  player_color: TurnColor;
+  moves_count: number;
+  mistakes_count: number;
+  blunders_count: number;
+  adaptive_elo_after?: number;
+  created_at: string;
+  finished_at?: string;
+  fen: string;
+  moves: MoveRecord[];
+}
+
 export interface CoachRequest {
   game_id?: string | null;
   question: string;
   position: string;
+  auto_fallback?: boolean;
   simulate_error?: 'none' | 'timeout' | 'rate_limit' | 'unavailable';
 }
 
@@ -86,6 +122,8 @@ export interface CoachResponse {
   missing_information: string[];
   provider?: string;
   model?: string;
+  fallback_used?: boolean;
+  fallback_reason?: string | null;
   latency_ms?: number;
   input_tokens?: number;
   output_tokens?: number;
@@ -135,6 +173,7 @@ export interface HealthResponse {
   version: string;
   provider: string;
   model: string;
+  fallback_model?: string;
   mode: string;
   storage: string;
   extra: {
@@ -183,6 +222,13 @@ export interface TelemetryLogEntry {
   duration_ms?: number;
 }
 
+export interface ModelUsageBreakdown {
+  requests: number;
+  input_tokens: number;
+  output_tokens: number;
+  cost: number;
+}
+
 export interface AiUsageMetrics {
   usage_date: string;
   request_count: number;
@@ -194,6 +240,12 @@ export interface AiUsageMetrics {
   avg_latency_ms: number;
   total_http_requests: number;
   error_count: number;
+  active_model: string;
+  primary_model: string;
+  fallback_model: string;
+  model_token_limit: number;
+  fallback_triggered_count: number;
+  by_model: Record<string, ModelUsageBreakdown>;
 }
 
 export interface ApiExchangeLog {

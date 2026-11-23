@@ -14,6 +14,8 @@ import {
   type PieceType,
 } from './pieceFactory';
 
+import type { SelectedPieceInfo } from '../../utils/pieceGuides';
+
 type CameraPreset = 'white' | 'black' | 'top' | 'iso';
 
 interface ChessBoard3DProps {
@@ -25,10 +27,12 @@ interface ChessBoard3DProps {
   starterNote?: string;
   isCheck: boolean;
   lastMove: { from: string; to: string } | null;
+  hintMove?: { from: string; to: string } | null;
   disabled?: boolean;
   zenMode: boolean;
   onToggleZenMode: () => void;
   onAttemptMove: (from: string, to: string, promotion?: string) => Promise<void>;
+  onSelectPiece?: (info: SelectedPieceInfo | null) => void;
   capturedWhite: string[];
   capturedBlack: string[];
   status: string;
@@ -135,10 +139,12 @@ export function ChessBoard3D({
   starterNote,
   isCheck,
   lastMove,
+  hintMove = null,
   disabled = false,
   zenMode,
   onToggleZenMode,
   onAttemptMove,
+  onSelectPiece,
   capturedWhite,
   capturedBlack,
   status,
@@ -157,9 +163,12 @@ export function ChessBoard3D({
   const fenRef = useRef(fen);
   const playerColorRef = useRef(playerColor);
   const opponentRef = useRef(opponent);
+  const lastMoveRef = useRef(lastMove);
+  const hintMoveRef = useRef(hintMove);
   const selectedRef = useRef<string | null>(null);
   const disabledRef = useRef(disabled);
   const onAttemptMoveRef = useRef(onAttemptMove);
+  const onSelectPieceRef = useRef(onSelectPiece);
   const requestRenderRef = useRef<() => void>(() => {});
   const cameraAnimatingRef = useRef(false);
   const presetTargetRef = useRef<THREE.Vector3>(new THREE.Vector3(0, 6.8, 7.6));
@@ -181,8 +190,11 @@ export function ChessBoard3D({
   fenRef.current = fen;
   playerColorRef.current = playerColor;
   opponentRef.current = opponent;
+  lastMoveRef.current = lastMove;
+  hintMoveRef.current = hintMove;
   disabledRef.current = disabled;
   onAttemptMoveRef.current = onAttemptMove;
+  onSelectPieceRef.current = onSelectPiece;
 
   // Orient camera to player's assigned color when a new game starts
   useEffect(() => {
@@ -224,17 +236,18 @@ export function ChessBoard3D({
     setSelectedSquare(null);
     setLegalTargets([]);
     setCaptureTargets([]);
+    onSelectPieceRef.current?.(null);
     syncBoardRef.current();
     updateHighlightsRef.current();
     requestRenderRef.current();
   }, [fen, lastMove, isCheck]);
 
-  // Update highlights whenever selectedSquare changes
+  // Update highlights whenever selectedSquare or hintMove changes
   useEffect(() => {
     selectedRef.current = selectedSquare;
     updateHighlightsRef.current();
     requestRenderRef.current();
-  }, [selectedSquare, legalTargets, captureTargets]);
+  }, [selectedSquare, legalTargets, captureTargets, hintMove]);
 
   useEffect(() => {
     const container = mountRef.current;
@@ -268,7 +281,10 @@ export function ChessBoard3D({
     renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
     renderer.shadowMap.enabled = !isSoftwareGl;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    renderer.setSize(container.clientWidth, container.clientHeight);
+    renderer.setSize(container.clientWidth, container.clientHeight, false);
+    renderer.domElement.style.width = '100%';
+    renderer.domElement.style.height = '100%';
+    renderer.domElement.style.display = 'block';
     container.appendChild(renderer.domElement);
 
     const scene = new THREE.Scene();
@@ -380,6 +396,14 @@ export function ChessBoard3D({
       color: '#EF4444',
       transparent: true,
       opacity: 0.56,
+      depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+    });
+    const hintOverlayMat = new THREE.MeshBasicMaterial({
+      color: '#38BDF8',
+      transparent: true,
+      opacity: 0.44,
       depthWrite: false,
       polygonOffset: true,
       polygonOffsetFactor: -1,
@@ -570,6 +594,9 @@ export function ChessBoard3D({
         }
       }
 
+      const curLastMove = lastMoveRef.current;
+      const curHintMove = hintMoveRef.current;
+
       for (const [sq, nodes] of overlayMeshes.entries()) {
         nodes.dot.visible = legalSet.has(sq);
         nodes.ring.visible = captureSet.has(sq);
@@ -580,7 +607,10 @@ export function ChessBoard3D({
         } else if (sel === sq) {
           nodes.plane.material = selectedOverlayMat;
           nodes.plane.visible = true;
-        } else if (lastMove && (lastMove.from === sq || lastMove.to === sq)) {
+        } else if (curHintMove && (curHintMove.from === sq || curHintMove.to === sq)) {
+          nodes.plane.material = hintOverlayMat;
+          nodes.plane.visible = true;
+        } else if (curLastMove && (curLastMove.from === sq || curLastMove.to === sq)) {
           nodes.plane.material = lastMoveOverlayMat;
           nodes.plane.visible = true;
         } else {
@@ -642,6 +672,7 @@ export function ChessBoard3D({
           setSelectedSquare(null);
           setLegalTargets([]);
           setCaptureTargets([]);
+          onSelectPieceRef.current?.(null);
           return;
         }
 
@@ -657,6 +688,7 @@ export function ChessBoard3D({
           setSelectedSquare(null);
           setLegalTargets([]);
           setCaptureTargets([]);
+          onSelectPieceRef.current?.(null);
           return;
         }
       }
@@ -671,13 +703,23 @@ export function ChessBoard3D({
             : 'b';
       if (piece && piece.color === chess.turn() && piece.color === allowedColor) {
         const moves = chess.moves({ square: clickedSquare as Square, verbose: true });
+        const quiet = moves.filter((m) => !m.captured).map((m) => m.to);
+        const caps = moves.filter((m) => Boolean(m.captured)).map((m) => m.to);
         setSelectedSquare(clickedSquare);
-        setLegalTargets(moves.filter((m) => !m.captured).map((m) => m.to));
-        setCaptureTargets(moves.filter((m) => Boolean(m.captured)).map((m) => m.to));
+        setLegalTargets(quiet);
+        setCaptureTargets(caps);
+        onSelectPieceRef.current?.({
+          square: clickedSquare,
+          type: piece.type,
+          color: piece.color,
+          legalCount: quiet.length,
+          captureCount: caps.length,
+        });
       } else {
         setSelectedSquare(null);
         setLegalTargets([]);
         setCaptureTargets([]);
+        onSelectPieceRef.current?.(null);
       }
     };
 
@@ -802,11 +844,11 @@ export function ChessBoard3D({
 
     const onResize = () => {
       if (!container) return;
-      const w = container.clientWidth;
+      const w = Math.max(container.clientWidth, 1);
       const h = Math.max(container.clientHeight, 1);
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
+      renderer.setSize(w, h, false);
       requestRender();
     };
 
@@ -841,6 +883,7 @@ export function ChessBoard3D({
       selectedOverlayMat.dispose();
       lastMoveOverlayMat.dispose();
       checkOverlayMat.dispose();
+      hintOverlayMat.dispose();
       legalDotMat.dispose();
       captureRingMat.dispose();
       envTexture.dispose();
@@ -863,9 +906,9 @@ export function ChessBoard3D({
   };
 
   return (
-    <div className="relative w-full h-full min-h-[460px] bg-[#0B0E14] overflow-hidden select-none">
+    <div className="relative w-full h-full min-h-0 bg-[#0B0E14] overflow-hidden select-none">
       {/* Dedicated WebGL Mount Container */}
-      <div ref={mountRef} className="w-full h-full cursor-grab active:cursor-grabbing" />
+      <div ref={mountRef} className="w-full h-full overflow-hidden cursor-grab active:cursor-grabbing" />
 
       {/* Minimal Top-Left Unboxed Turn & Starter Readout */}
       <div className="pointer-events-none absolute top-4 left-4 right-4 flex items-start justify-between gap-4">

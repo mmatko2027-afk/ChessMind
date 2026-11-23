@@ -1,11 +1,13 @@
 import 'dotenv/config';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import { WebSocketServer, type WebSocket } from 'ws';
 import { Chess, type Move } from 'chess.js';
-import { GoogleGenAI, Type } from '@google/genai';
+import { GoogleGenAI, Modality, Type, type LiveServerMessage } from '@google/genai';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -37,10 +39,14 @@ interface TelemetryLogEntry {
   duration_ms?: number;
 }
 
+type MoveQuality = 'best' | 'good' | 'inaccuracy' | 'mistake' | 'blunder';
+
 interface UserSession {
   user_id: string;
   username: string;
   email?: string;
+  is_admin: boolean;
+  adaptive_elo: number;
   created_at: string;
   games_played: number;
 }
@@ -57,6 +63,21 @@ interface MoveRecord {
   fen: string;
   timestamp: string;
   engine?: string;
+  eval_cp?: number | null;
+  mate?: number | null;
+  bestmove?: string | null;
+  quality?: MoveQuality;
+  cp_loss?: number;
+  mistake_note?: string | null;
+}
+
+interface LiveMoveFeedback {
+  ply: number;
+  move: string;
+  quality: MoveQuality;
+  cp_loss: number;
+  bestmove: string | null;
+  note: string;
 }
 
 interface EngineEvalSnapshot {
@@ -70,8 +91,11 @@ interface EngineEvalSnapshot {
 interface StoredGame {
   game_id: string;
   owner_id: string;
+  username: string;
   level: 'beginner' | 'intermediate' | 'advanced';
   opponent: 'stockfish' | 'maia' | 'human';
+  engine_label: string;
+  adaptive_elo: number;
   player_color: 'white' | 'black';
   starter_mode: 'random' | 'white' | 'black';
   starter_note: string;
@@ -83,6 +107,27 @@ interface StoredGame {
   };
   last_move: { from: string; to: string } | null;
   engine_eval: EngineEvalSnapshot | null;
+  last_player_feedback: LiveMoveFeedback | null;
+  created_at: string;
+  finished_at?: string;
+}
+
+interface GameHistoryItem {
+  game_id: string;
+  owner_id: string;
+  username: string;
+  level: 'beginner' | 'intermediate' | 'advanced';
+  status: 'active' | 'checkmate' | 'stalemate' | 'draw';
+  winner: 'white' | 'black' | 'draw' | null;
+  player_color: 'white' | 'black';
+  moves_count: number;
+  mistakes_count: number;
+  blunders_count: number;
+  adaptive_elo_after?: number;
+  created_at: string;
+  finished_at?: string;
+  fen: string;
+  moves: MoveRecord[];
 }
 
 interface AnalysisMistake {
@@ -113,6 +158,9 @@ const telemetryLogs: TelemetryLogEntry[] = [];
 const sseClients = new Set<Response>();
 const startedAt = Date.now();
 
+const PRIMARY_TEXT_MODEL = 'gemini-4-hydrogen';
+const FALLBACK_TEXT_MODEL = 'gemini-3.1-flash-lite';
+
 const aiUsage = {
   usage_date: new Date().toISOString().slice(0, 10),
   request_count: 0,
@@ -124,7 +172,26 @@ const aiUsage = {
   total_latency_ms: 0,
   total_http_requests: 0,
   error_count: 0,
+  primary_model: PRIMARY_TEXT_MODEL,
+  fallback_model: FALLBACK_TEXT_MODEL,
+  active_model: PRIMARY_TEXT_MODEL,
+  model_token_limit: 25000,
+  fallback_triggered_count: 0,
+  by_model: {} as Record<
+    string,
+    { requests: number; input_tokens: number; output_tokens: number; cost: number }
+  >,
 };
+
+function recordModelUsage(model: string, inputTokens: number, outputTokens: number, cost: number) {
+  if (!aiUsage.by_model[model]) {
+    aiUsage.by_model[model] = { requests: 0, input_tokens: 0, output_tokens: 0, cost: 0 };
+  }
+  aiUsage.by_model[model].requests += 1;
+  aiUsage.by_model[model].input_tokens += inputTokens;
+  aiUsage.by_model[model].output_tokens += outputTokens;
+  aiUsage.by_model[model].cost = Number((aiUsage.by_model[model].cost + cost).toFixed(6));
+}
 
 function formatPythonAsctime(date: Date): string {
   const pad = (n: number, len = 2) => String(n).padStart(len, '0');
@@ -191,6 +258,9 @@ function getUsageSnapshot() {
     aiUsage.input_tokens = 0;
     aiUsage.output_tokens = 0;
     aiUsage.total_latency_ms = 0;
+    aiUsage.fallback_triggered_count = 0;
+    aiUsage.active_model = aiUsage.primary_model;
+    aiUsage.by_model = {};
   }
   return {
     usage_date: aiUsage.usage_date,
@@ -206,12 +276,69 @@ function getUsageSnapshot() {
         : 0,
     total_http_requests: aiUsage.total_http_requests,
     error_count: aiUsage.error_count,
+    active_model: aiUsage.active_model,
+    primary_model: aiUsage.primary_model,
+    fallback_model: aiUsage.fallback_model,
+    model_token_limit: aiUsage.model_token_limit,
+    fallback_triggered_count: aiUsage.fallback_triggered_count,
+    by_model: aiUsage.by_model,
   };
 }
 
 // ============================================================================
-// Lightweight Session Store (No Firebase required)
+// Persistent Store (Users, Adaptive Elo & Game History)
 // ============================================================================
+
+const DATA_DIR = path.resolve(__dirname, 'data');
+const STORE_PATH = path.join(DATA_DIR, 'chessmind_store.json');
+
+interface PersistedStore {
+  userProfiles: Record<string, { adaptive_elo: number; games_played: number }>;
+  history: GameHistoryItem[];
+}
+
+const persistedStore: PersistedStore = (() => {
+  try {
+    if (fs.existsSync(STORE_PATH)) {
+      const raw = JSON.parse(fs.readFileSync(STORE_PATH, 'utf-8')) as Partial<PersistedStore>;
+      return {
+        userProfiles: raw.userProfiles ?? {},
+        history: Array.isArray(raw.history) ? raw.history : [],
+      };
+    }
+  } catch {
+    // Start fresh if store is unreadable
+  }
+  return { userProfiles: {}, history: [] };
+})();
+
+function saveStoreToDisk() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    fs.writeFileSync(STORE_PATH, JSON.stringify(persistedStore, null, 2), 'utf-8');
+  } catch {
+    // Ignore ephemeral filesystem errors
+  }
+}
+
+function getProfileKey(username: string, email?: string): string {
+  return (email || username).trim().toLowerCase();
+}
+
+function isUserAdmin(username: string, email?: string): boolean {
+  const uname = username.trim().toLowerCase();
+  const mail = (email || '').trim().toLowerCase();
+  const envAdmin = (process.env.ADMIN_EMAIL || '').trim().toLowerCase();
+  return (
+    uname === 'admin' ||
+    uname === 'адмін' ||
+    mail === 'matsko.marina03@gmail.com' ||
+    (envAdmin.length > 0 && mail === envAdmin) ||
+    mail.startsWith('admin@')
+  );
+}
 
 const sessions = new Map<string, UserSession>();
 const COOKIE_NAME = 'chessmind_sid';
@@ -556,38 +683,103 @@ async function queryMaiaMove(
   };
 }
 
+function evalSnapshotToWhiteCp(snap: EngineEvalSnapshot | null | undefined): number {
+  if (!snap) return 0;
+  if (typeof snap.mate === 'number') {
+    return snap.mate > 0 ? 9000 : -9000;
+  }
+  if (typeof snap.evaluation === 'number') {
+    return Math.round(snap.evaluation * 100);
+  }
+  return 0;
+}
+
+function classifyMoveQuality(
+  cpLoss: number,
+  playedUci: string,
+  bestUci: string | null,
+): { quality: MoveQuality; note: string } {
+  if (bestUci && playedUci === bestUci) {
+    return { quality: 'best', note: 'Найкращий хід за оцінкою Stockfish.' };
+  }
+  if (cpLoss >= 300) {
+    return {
+      quality: 'blunder',
+      note: `Груба помилка (втрата ${(cpLoss / 100).toFixed(1)} пішака)${bestUci ? `. Сильніше було: ${bestUci}` : ''}.`,
+    };
+  }
+  if (cpLoss >= 150) {
+    return {
+      quality: 'mistake',
+      note: `Помилка (втрата ${(cpLoss / 100).toFixed(1)} пішака)${bestUci ? `. Кращий варіант: ${bestUci}` : ''}.`,
+    };
+  }
+  if (cpLoss >= 60) {
+    return {
+      quality: 'inaccuracy',
+      note: `Неточність (−${(cpLoss / 100).toFixed(1)})${bestUci ? `. Точніше: ${bestUci}` : ''}.`,
+    };
+  }
+  return { quality: 'good', note: 'Хороший надійний хід.' };
+}
+
 async function computeEngineReply(
   game: StoredGame,
   requestId: string,
 ): Promise<{ move: Move; engineLabel: string; evalSnapshot: EngineEvalSnapshot } | null> {
   if (game.opponent === 'human' || game.chess.isGameOver()) return null;
 
-  if (game.opponent === 'stockfish') {
-    const depth = game.level === 'beginner' ? 3 : game.level === 'intermediate' ? 8 : 14;
-    const sf = await queryStockfishApi(game.chess.fen(), depth, requestId);
-
-    // Beginner Stockfish occasionally takes 2nd-best or slightly softer line if available
-    let move = sf.bestmove ? uciToMoveObj(game.chess, sf.bestmove) : null;
-    if (!move) {
-      const fb = chooseLocalFallbackMove(game.chess, game.level);
-      if (fb) move = fb.move;
-    }
-    if (!move) return null;
-
+  // Beginner: friendly human-like Maia-1100
+  if (game.level === 'beginner') {
+    const maia = await queryMaiaMove(game.chess, 'beginner', requestId);
+    if (!maia) return null;
     return {
-      move,
-      engineLabel: `Stockfish (${sf.source}, d=${sf.depth ?? depth})`,
-      evalSnapshot: sf,
+      move: maia.move,
+      engineLabel: 'Авто-рушій: Навчальний (Maia 1100)',
+      evalSnapshot: maia.evalSnapshot,
     };
   }
 
-  // Maia Chess
-  const maia = await queryMaiaMove(game.chess, game.level, requestId);
-  if (!maia) return null;
+  // Intermediate: Adaptive difficulty adjusted by player's adaptive_elo
+  if (game.level === 'intermediate') {
+    const elo = game.adaptive_elo;
+    if (elo >= 1600) {
+      const depth = elo >= 1750 ? 11 : 8;
+      const sf = await queryStockfishApi(game.chess.fen(), depth, requestId);
+      let move = sf.bestmove ? uciToMoveObj(game.chess, sf.bestmove) : null;
+      if (!move) {
+        move = chooseLocalFallbackMove(game.chess, 'intermediate')?.move ?? null;
+      }
+      if (!move) return null;
+      return {
+        move,
+        engineLabel: `Адаптивний рушій (${elo} Elo · d=${depth})`,
+        evalSnapshot: sf,
+      };
+    }
+    const maiaLevel = elo >= 1450 ? 'intermediate' : 'beginner';
+    const maia = await queryMaiaMove(game.chess, maiaLevel, requestId);
+    if (!maia) return null;
+    return {
+      move: maia.move,
+      engineLabel: `Адаптивний рушій (${elo} Elo)`,
+      evalSnapshot: maia.evalSnapshot,
+    };
+  }
+
+  // Advanced: Full Stockfish depth 14
+  const depth = 14;
+  const sf = await queryStockfishApi(game.chess.fen(), depth, requestId);
+  let move = sf.bestmove ? uciToMoveObj(game.chess, sf.bestmove) : null;
+  if (!move) {
+    move = chooseLocalFallbackMove(game.chess, 'advanced')?.move ?? null;
+  }
+  if (!move) return null;
+
   return {
-    move: maia.move,
-    engineLabel: `Maia-${maia.elo}`,
-    evalSnapshot: maia.evalSnapshot,
+    move,
+    engineLabel: `Stockfish (${sf.source}, d=${sf.depth ?? depth})`,
+    evalSnapshot: sf,
   };
 }
 
@@ -612,6 +804,8 @@ function serializeGame(game: StoredGame) {
     status,
     level: game.level,
     opponent: game.opponent,
+    engine_label: game.engine_label,
+    adaptive_elo: game.adaptive_elo,
     player_color: game.player_color,
     starter_mode: game.starter_mode,
     starter_note: game.starter_note,
@@ -625,10 +819,66 @@ function serializeGame(game: StoredGame) {
     captured: game.captured,
     last_move: game.last_move,
     engine_eval: game.engine_eval,
+    last_player_feedback: game.last_player_feedback,
   };
 }
 
-function recordMoveOnGame(game: StoredGame, move: Move, engine?: string) {
+function syncGameToHistory(game: StoredGame) {
+  const serialized = serializeGame(game);
+  const mistakesCount = game.moves.filter(
+    (m) => m.color === game.player_color && (m.quality === 'mistake' || m.quality === 'inaccuracy'),
+  ).length;
+  const blundersCount = game.moves.filter(
+    (m) => m.color === game.player_color && m.quality === 'blunder',
+  ).length;
+
+  if (serialized.status !== 'active' && !game.finished_at) {
+    game.finished_at = new Date().toISOString();
+  }
+
+  const item: GameHistoryItem = {
+    game_id: game.game_id,
+    owner_id: game.owner_id,
+    username: game.username,
+    level: game.level,
+    status: serialized.status,
+    winner: serialized.winner,
+    player_color: game.player_color,
+    moves_count: game.moves.length,
+    mistakes_count: mistakesCount,
+    blunders_count: blundersCount,
+    adaptive_elo_after: game.adaptive_elo,
+    created_at: game.created_at,
+    finished_at: game.finished_at,
+    fen: serialized.fen,
+    moves: game.moves,
+  };
+
+  const idx = persistedStore.history.findIndex((h) => h.game_id === game.game_id);
+  if (idx >= 0) {
+    persistedStore.history[idx] = item;
+  } else {
+    persistedStore.history.unshift(item);
+  }
+  if (persistedStore.history.length > 100) {
+    persistedStore.history.length = 100;
+  }
+  saveStoreToDisk();
+}
+
+function recordMoveOnGame(
+  game: StoredGame,
+  move: Move,
+  engine?: string,
+  analysis?: {
+    eval_cp?: number | null;
+    mate?: number | null;
+    bestmove?: string | null;
+    quality?: MoveQuality;
+    cp_loss?: number;
+    mistake_note?: string | null;
+  },
+) {
   const color: 'white' | 'black' = move.color === 'w' ? 'white' : 'black';
   if (move.captured) {
     game.captured[color].push(move.captured);
@@ -647,6 +897,7 @@ function recordMoveOnGame(game: StoredGame, move: Move, engine?: string) {
     fen: game.chess.fen(),
     timestamp: new Date().toISOString(),
     engine,
+    ...analysis,
   });
 }
 
@@ -821,13 +1072,19 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     return;
   }
 
+  const profileKey = getProfileKey(username, email || undefined);
+  const existingProfile = persistedStore.userProfiles[profileKey];
+  const adminFlag = isUserAdmin(username, email || undefined);
+
   const sid = crypto.randomUUID();
   const user: UserSession = {
-    user_id: `usr-${sid.slice(0, 8)}`,
+    user_id: `usr-${crypto.createHash('sha1').update(profileKey).digest('hex').slice(0, 8)}`,
     username,
     email: email || undefined,
+    is_admin: adminFlag,
+    adaptive_elo: existingProfile?.adaptive_elo ?? 1350,
     created_at: new Date().toISOString(),
-    games_played: 0,
+    games_played: existingProfile?.games_played ?? 0,
   };
   sessions.set(sid, user);
 
@@ -836,9 +1093,12 @@ app.post('/api/auth/login', (req: Request, res: Response) => {
     `${COOKIE_NAME}=${encodeURIComponent(sid)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`,
   );
 
-  emitTelemetry('INFO', `Player signed in: ${user.username} (${user.user_id})`, requestId, {
-    component: 'auth',
-  });
+  emitTelemetry(
+    'INFO',
+    `Player signed in: ${user.username} (admin=${user.is_admin}, elo=${user.adaptive_elo})`,
+    requestId,
+    { component: 'auth' },
+  );
 
   res.json({ authenticated: true, user });
 });
@@ -864,38 +1124,91 @@ app.get('/health', (_req: Request, res: Response) => {
   emitTelemetry('INFO', 'Health check requested', requestId, { component: 'api' });
   res.json({
     status: 'ok',
-    version: '0.2.0',
+    version: '0.3.0',
     provider: aiClient ? 'gemini' : 'mock',
-    model: aiClient ? 'gemini-4-hydrogen' : 'chessmind-mock',
+    model: aiClient ? aiUsage.active_model : 'chessmind-mock',
+    fallback_model: FALLBACK_TEXT_MODEL,
     mode: aiClient ? 'live' : 'mock',
     storage: 'ok',
     extra: {
       chess_engine: 'chess.js',
       stockfish_api: 'stockfish.online / chess-api.com',
       maia_engine: 'maia-1100/1500/1900 (lichess-pv)',
-      voice_models: 'gemini-3.5-transcribe + gemini-3.8-flash-lite-tts',
+      voice_models: 'gemini-3.8-live + gemini-3.5-transcribe + gemini-3.8-flash-lite-tts',
     },
     uptime_s: Math.floor((Date.now() - startedAt) / 1000),
   });
 });
 
-// ---- Telemetry ----
-app.get('/api/telemetry/logs', (_req: Request, res: Response) => {
+// ---- Admin-Only Telemetry & Token Settings ----
+app.get('/api/telemetry/logs', (req: Request, res: Response) => {
+  const session = getSessionFromRequest(req);
+  if (!session?.is_admin) {
+    res.status(403).json({
+      error: {
+        kind: 'forbidden',
+        message: 'Статистика токенів та логи доступні лише адміністратору.',
+        retryable: false,
+        request_id: String(res.locals.requestId),
+      },
+    });
+    return;
+  }
   res.json({
     logs: telemetryLogs,
     usage: getUsageSnapshot(),
   });
 });
 
-app.delete('/api/telemetry/logs', (_req: Request, res: Response) => {
+app.delete('/api/telemetry/logs', (req: Request, res: Response) => {
+  const session = getSessionFromRequest(req);
+  if (!session?.is_admin) {
+    res.status(403).json({
+      error: {
+        kind: 'forbidden',
+        message: 'Доступ заборонено.',
+        retryable: false,
+        request_id: String(res.locals.requestId),
+      },
+    });
+    return;
+  }
   telemetryLogs.length = 0;
-  emitTelemetry('INFO', 'Telemetry log buffer cleared by operator', String(res.locals.requestId), {
+  emitTelemetry('INFO', 'Telemetry log buffer cleared by admin', String(res.locals.requestId), {
     component: 'storage',
   });
   res.json({ cleared: true, logs: telemetryLogs, usage: getUsageSnapshot() });
 });
 
+app.post('/api/admin/settings', (req: Request, res: Response) => {
+  const session = getSessionFromRequest(req);
+  if (!session?.is_admin) {
+    res.status(403).json({
+      error: {
+        kind: 'forbidden',
+        message: 'Доступ лише для адміністратора.',
+        retryable: false,
+        request_id: String(res.locals.requestId),
+      },
+    });
+    return;
+  }
+  const newLimit = Number(req.body?.model_token_limit);
+  if (Number.isFinite(newLimit) && newLimit >= 100) {
+    aiUsage.model_token_limit = Math.round(newLimit);
+  }
+  if (req.body?.reset_active_model) {
+    aiUsage.active_model = PRIMARY_TEXT_MODEL;
+  }
+  res.json({ usage: getUsageSnapshot() });
+});
+
 app.get('/api/telemetry/stream', (req: Request, res: Response) => {
+  const session = getSessionFromRequest(req);
+  if (!session?.is_admin) {
+    res.status(403).end();
+    return;
+  }
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -907,7 +1220,37 @@ app.get('/api/telemetry/stream', (req: Request, res: Response) => {
   });
 });
 
-// ---- Games (with Stockfish / Maia + Random First-Player Draw) ----
+// ---- Games History ----
+app.get('/api/games/history', (req: Request, res: Response) => {
+  const session = getSessionFromRequest(req);
+  if (!session) {
+    res.json({ games: [] });
+    return;
+  }
+  const filtered = session.is_admin
+    ? persistedStore.history
+    : persistedStore.history.filter((g) => g.owner_id === session.user_id);
+  res.json({ games: filtered });
+});
+
+app.get('/api/games/:gameId/review', (req: Request, res: Response) => {
+  const gameId = String(req.params.gameId);
+  const found = persistedStore.history.find((g) => g.game_id === gameId);
+  if (!found) {
+    res.status(404).json({
+      error: {
+        kind: 'game_not_found',
+        message: 'Запис партії не знайдено в історії.',
+        retryable: false,
+        request_id: String(res.locals.requestId),
+      },
+    });
+    return;
+  }
+  res.json(found);
+});
+
+// ---- Games (Automatic Engine Selection + Real-Time Stockfish Analysis) ----
 app.post('/api/games', async (req: Request, res: Response) => {
   const requestId = String(res.locals.requestId);
   const session = getSessionFromRequest(req);
@@ -916,14 +1259,21 @@ app.post('/api/games', async (req: Request, res: Response) => {
   const level: StoredGame['level'] = ['beginner', 'intermediate', 'advanced'].includes(body.level)
     ? body.level
     : 'intermediate';
-  const opponent: StoredGame['opponent'] = ['stockfish', 'maia', 'human'].includes(body.opponent)
-    ? body.opponent
-    : 'stockfish';
   const starterMode: StoredGame['starter_mode'] = ['random', 'white', 'black'].includes(
     body.starter_mode,
   )
     ? body.starter_mode
     : 'random';
+
+  // Automatic engine assignment based purely on selected difficulty
+  const opponent: StoredGame['opponent'] = level === 'advanced' ? 'stockfish' : 'maia';
+  const adaptiveElo = session?.adaptive_elo ?? 1350;
+  const engineLabel =
+    level === 'beginner'
+      ? 'Навчальний режим (Maia 1100)'
+      : level === 'intermediate'
+        ? `Адаптивний режим (${adaptiveElo} Elo)`
+        : 'Майстер (Stockfish d=14)';
 
   let playerColor: 'white' | 'black' = 'white';
   if (starterMode === 'random') {
@@ -932,29 +1282,27 @@ app.post('/api/games', async (req: Request, res: Response) => {
     playerColor = starterMode;
   }
 
-  const opponentLabel =
-    opponent === 'stockfish' ? 'Stockfish' : opponent === 'maia' ? 'Maia Chess' : 'Гравець 2';
-
   const starterNote =
-    opponent === 'human'
-      ? 'Локальна гра: першими завжди ходять Білі.'
-      : starterMode === 'random'
-        ? playerColor === 'white'
-          ? `Жереб: ви ходите першим (Білі) · ${opponentLabel} грає Чорними`
-          : `Жереб: першим ходить ${opponentLabel} (Білі) · Ви граєте Чорними`
-        : playerColor === 'white'
-          ? `Ви граєте Білими (ходите першим) · ${opponentLabel} грає Чорними`
-          : `Першим ходить ${opponentLabel} (Білі) · Ви граєте Чорними`;
+    starterMode === 'random'
+      ? playerColor === 'white'
+        ? 'Жереб: ви ходите першим (Білі)'
+        : 'Жереб: першим ходить суперник (Білі), ви граєте Чорними'
+      : playerColor === 'white'
+        ? 'Ви граєте Білими (ходите першим)'
+        : 'Першим ходить суперник (Білі), ви граєте Чорними';
 
   gameCounter += 1;
-  const gameId = `game-${String(gameCounter).padStart(3, '0')}`;
+  const gameId = `game-${Date.now().toString(36).slice(-4)}-${String(gameCounter).padStart(3, '0')}`;
   const chess = new Chess();
 
   const game: StoredGame = {
     game_id: gameId,
     owner_id: session?.user_id ?? 'guest',
+    username: session?.username ?? 'Гість',
     level,
     opponent,
+    engine_label: engineLabel,
+    adaptive_elo: adaptiveElo,
     player_color: playerColor,
     starter_mode: starterMode,
     starter_note: starterNote,
@@ -962,31 +1310,44 @@ app.post('/api/games', async (req: Request, res: Response) => {
     moves: [],
     captured: { white: [], black: [] },
     last_move: null,
-    engine_eval: null,
+    engine_eval: { evaluation: 0.2, mate: null, bestmove: 'e2e4', depth: 8, source: 'opening' },
+    last_player_feedback: null,
+    created_at: new Date().toISOString(),
   };
   games.set(gameId, game);
 
   if (session) {
     session.games_played += 1;
+    const pk = getProfileKey(session.username, session.email);
+    persistedStore.userProfiles[pk] = {
+      adaptive_elo: session.adaptive_elo,
+      games_played: session.games_played,
+    };
+    saveStoreToDisk();
   }
 
   emitTelemetry(
     'INFO',
-    `Created ${gameId} for ${session?.username ?? 'guest'}: opponent=${opponent} level=${level} starter_mode=${starterMode} -> player_color=${playerColor}`,
+    `Created ${gameId} for ${session?.username ?? 'guest'}: level=${level} auto_engine="${engineLabel}" player_color=${playerColor}`,
     requestId,
     { component: 'storage' },
   );
 
-  // If the random draw gave White (first move) to Stockfish or Maia, compute opening move immediately
-  if (opponent !== 'human' && playerColor === 'black') {
+  // If AI moves first (White), compute opening move immediately
+  if (playerColor === 'black') {
     const reply = await computeEngineReply(game, requestId);
     if (reply) {
       game.chess.move(reply.move);
-      recordMoveOnGame(game, reply.move, reply.engineLabel);
+      recordMoveOnGame(game, reply.move, reply.engineLabel, {
+        eval_cp: evalSnapshotToWhiteCp(reply.evalSnapshot),
+        mate: reply.evalSnapshot.mate,
+        bestmove: reply.evalSnapshot.bestmove,
+      });
       game.engine_eval = reply.evalSnapshot;
     }
   }
 
+  syncGameToHistory(game);
   res.status(200).json(serializeGame(game));
 });
 
@@ -1010,13 +1371,168 @@ app.get('/api/games/:gameId', (req: Request, res: Response) => {
   res.json(serializeGame(game));
 });
 
-app.post('/api/games/:gameId/moves', async (req: Request, res: Response) => {
-  const requestId = String(res.locals.requestId);
-  const game = games.get(String(req.params.gameId));
-  if (!game) {
-    emitTelemetry('WARNING', `Move rejected: game ${req.params.gameId} not found`, requestId, {
+async function applyMoveAndAnalyze(
+  game: StoredGame,
+  rawMove: string,
+  session: UserSession | null,
+  requestId: string,
+): Promise<
+  | { ok: true; payload: ReturnType<typeof serializeGame> & { move: string; computer_move: string | null; computer_engine: string | null } }
+  | { ok: false; status: number; error: { kind: string; message: string; retryable: boolean; request_id: string } }
+> {
+  const turnColor = game.chess.turn() === 'w' ? 'white' : 'black';
+  if (game.opponent !== 'human' && turnColor !== game.player_color) {
+    return {
+      ok: false,
+      status: 409,
+      error: {
+        kind: 'not_your_turn',
+        message: 'Зараз черга ходу суперника.',
+        retryable: false,
+        request_id: requestId,
+      },
+    };
+  }
+
+  // Evaluate position BEFORE player's move (use cached eval if available, else Stockfish depth 8)
+  const preEval =
+    game.engine_eval && game.engine_eval.bestmove
+      ? game.engine_eval
+      : await queryStockfishApi(game.chess.fen(), 8, requestId);
+  const preWhiteCp = evalSnapshotToWhiteCp(preEval);
+
+  let appliedMove: Move | null = null;
+  try {
+    if (/^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(rawMove)) {
+      const from = rawMove.slice(0, 2).toLowerCase();
+      const to = rawMove.slice(2, 4).toLowerCase();
+      const promotion = rawMove.length === 5 ? rawMove[4].toLowerCase() : undefined;
+      appliedMove = game.chess.move({ from, to, promotion });
+    } else {
+      appliedMove = game.chess.move(rawMove);
+    }
+  } catch {
+    appliedMove = null;
+  }
+
+  if (!appliedMove) {
+    emitTelemetry('WARNING', `Illegal move rejected: "${rawMove}" in ${game.game_id}`, requestId, {
       component: 'engine',
     });
+    return {
+      ok: false,
+      status: 400,
+      error: {
+        kind: 'invalid_move',
+        message: 'Неможливо виконати цей шаховий хід.',
+        retryable: false,
+        request_id: requestId,
+      },
+    };
+  }
+
+  const playedUci = `${appliedMove.from}${appliedMove.to}${appliedMove.promotion ?? ''}`;
+
+  // Real-time Stockfish analysis AFTER player's move
+  const postEval = await queryStockfishApi(game.chess.fen(), 8, requestId);
+  const postWhiteCp = evalSnapshotToWhiteCp(postEval);
+  const cpLoss = Math.max(
+    0,
+    game.player_color === 'white' ? preWhiteCp - postWhiteCp : postWhiteCp - preWhiteCp,
+  );
+  const { quality, note } = classifyMoveQuality(cpLoss, playedUci, preEval.bestmove);
+
+  recordMoveOnGame(game, appliedMove, 'player', {
+    eval_cp: postWhiteCp,
+    mate: postEval.mate,
+    bestmove: preEval.bestmove,
+    quality,
+    cp_loss: cpLoss,
+    mistake_note: note,
+  });
+
+  game.engine_eval = postEval;
+  game.last_player_feedback = {
+    ply: game.moves.length,
+    move: appliedMove.san,
+    quality,
+    cp_loss: cpLoss,
+    bestmove: preEval.bestmove,
+    note,
+  };
+
+  // Adaptive intermediate Elo adjustment based on player move quality
+  if (game.level === 'intermediate') {
+    const deltaElo =
+      quality === 'best' ? 6 : quality === 'good' ? 2 : quality === 'inaccuracy' ? -3 : quality === 'mistake' ? -8 : -14;
+    game.adaptive_elo = Math.min(1850, Math.max(1100, game.adaptive_elo + deltaElo));
+    game.engine_label = `Адаптивний режим (${game.adaptive_elo} Elo)`;
+    if (session) {
+      session.adaptive_elo = game.adaptive_elo;
+    }
+  }
+
+  let computerMoveUci: string | null = null;
+  let computerEngine: string | null = null;
+
+  if (game.opponent !== 'human' && !game.chess.isGameOver()) {
+    const reply = await computeEngineReply(game, requestId);
+    if (reply) {
+      game.chess.move(reply.move);
+      recordMoveOnGame(game, reply.move, reply.engineLabel, {
+        eval_cp: evalSnapshotToWhiteCp(reply.evalSnapshot),
+        mate: reply.evalSnapshot.mate,
+        bestmove: reply.evalSnapshot.bestmove,
+      });
+      game.engine_eval = reply.evalSnapshot;
+      computerMoveUci = `${reply.move.from}${reply.move.to}${reply.move.promotion ?? ''}`;
+      computerEngine = reply.engineLabel;
+    }
+  }
+
+  // Final adaptive Elo update when game finishes
+  if (game.chess.isGameOver() && game.level === 'intermediate') {
+    const winner = game.chess.isCheckmate()
+      ? game.chess.turn() === 'w'
+        ? 'black'
+        : 'white'
+      : 'draw';
+    if (winner === game.player_color) {
+      game.adaptive_elo = Math.min(1850, game.adaptive_elo + 25);
+    } else if (winner !== 'draw') {
+      game.adaptive_elo = Math.max(1100, game.adaptive_elo - 20);
+    }
+    if (session) {
+      session.adaptive_elo = game.adaptive_elo;
+    }
+  }
+
+  if (session) {
+    const pk = getProfileKey(session.username, session.email);
+    persistedStore.userProfiles[pk] = {
+      adaptive_elo: session.adaptive_elo,
+      games_played: session.games_played,
+    };
+  }
+
+  syncGameToHistory(game);
+
+  return {
+    ok: true,
+    payload: {
+      ...serializeGame(game),
+      move: playedUci,
+      computer_move: computerMoveUci,
+      computer_engine: computerEngine,
+    },
+  };
+}
+
+app.post('/api/games/:gameId/moves', async (req: Request, res: Response) => {
+  const requestId = String(res.locals.requestId);
+  const session = getSessionFromRequest(req);
+  const game = games.get(String(req.params.gameId));
+  if (!game) {
     res.status(404).json({
       error: {
         kind: 'game_not_found',
@@ -1041,80 +1557,12 @@ app.post('/api/games/:gameId/moves', async (req: Request, res: Response) => {
     return;
   }
 
-  // Enforce player turn color when playing against Stockfish or Maia
-  const turnColor = game.chess.turn() === 'w' ? 'white' : 'black';
-  if (game.opponent !== 'human' && turnColor !== game.player_color) {
-    emitTelemetry('WARNING', `Out-of-turn move attempted by player (${turnColor})`, requestId, {
-      component: 'engine',
-    });
-    res.status(409).json({
-      error: {
-        kind: 'not_your_turn',
-        message: 'Зараз черга ходу суперника.',
-        retryable: false,
-        request_id: requestId,
-      },
-    });
+  const outcome = await applyMoveAndAnalyze(game, rawMove, session, requestId);
+  if (!outcome.ok) {
+    res.status(outcome.status).json({ error: outcome.error });
     return;
   }
-
-  let appliedMove: Move | null = null;
-  try {
-    if (/^[a-h][1-8][a-h][1-8][qrbn]?$/i.test(rawMove)) {
-      const from = rawMove.slice(0, 2).toLowerCase();
-      const to = rawMove.slice(2, 4).toLowerCase();
-      const promotion = rawMove.length === 5 ? rawMove[4].toLowerCase() : undefined;
-      appliedMove = game.chess.move({ from, to, promotion });
-    } else {
-      appliedMove = game.chess.move(rawMove);
-    }
-  } catch {
-    appliedMove = null;
-  }
-
-  if (!appliedMove) {
-    emitTelemetry('WARNING', `Illegal move rejected: "${rawMove}" in ${game.game_id}`, requestId, {
-      component: 'engine',
-    });
-    res.status(400).json({
-      error: {
-        kind: 'invalid_move',
-        message: 'Неможливо виконати цей шаховий хід.',
-        retryable: false,
-        request_id: requestId,
-      },
-    });
-    return;
-  }
-
-  recordMoveOnGame(game, appliedMove, 'player');
-  emitTelemetry(
-    'INFO',
-    `Player move validated: ${appliedMove.san} (${appliedMove.from}${appliedMove.to})`,
-    requestId,
-    { component: 'engine' },
-  );
-
-  let computerMoveUci: string | null = null;
-  let computerEngine: string | null = null;
-
-  if (game.opponent !== 'human' && !game.chess.isGameOver()) {
-    const reply = await computeEngineReply(game, requestId);
-    if (reply) {
-      game.chess.move(reply.move);
-      recordMoveOnGame(game, reply.move, reply.engineLabel);
-      game.engine_eval = reply.evalSnapshot;
-      computerMoveUci = `${reply.move.from}${reply.move.to}${reply.move.promotion ?? ''}`;
-      computerEngine = reply.engineLabel;
-    }
-  }
-
-  res.json({
-    ...serializeGame(game),
-    move: `${appliedMove.from}${appliedMove.to}${appliedMove.promotion ?? ''}`,
-    computer_move: computerMoveUci,
-    computer_engine: computerEngine,
-  });
+  res.json(outcome.payload);
 });
 
 // ---- Explicit Stockfish Evaluation Endpoint ----
@@ -1215,21 +1663,11 @@ app.post('/api/coach/explain', async (req: Request, res: Response) => {
     chess.load(game.chess.fen());
   }
 
-  const usage = getUsageSnapshot();
-  if (usage.request_count >= usage.daily_ai_request_limit || usage.total_cost >= usage.daily_ai_budget) {
-    emitTelemetry('ERROR', 'ProviderBudgetExceededError: daily AI limit reached', requestId, {
-      component: 'storage',
-    });
-    res.status(429).json({
-      error: {
-        kind: 'budget_exceeded',
-        message: 'Перевищено денний ліміт AI-запитів.',
-        retryable: false,
-        request_id: requestId,
-      },
-    });
-    return;
-  }
+  const autoFallback = req.body?.auto_fallback !== false;
+  const primaryStats = aiUsage.by_model[PRIMARY_TEXT_MODEL];
+  const primaryTokensUsed = primaryStats
+    ? primaryStats.input_tokens + primaryStats.output_tokens
+    : 0;
 
   // Ground coach response in live Stockfish evaluation
   const stockfishEval = await queryStockfishApi(chess.fen(), 8, requestId);
@@ -1242,35 +1680,45 @@ app.post('/api/coach/explain', async (req: Request, res: Response) => {
   let output = buildFallbackCoachAnswer(question, chess, stockfishEval);
   let providerName = 'mock';
   let modelName = 'chessmind-mock';
+  let fallbackUsed = false;
+  let fallbackReason: string | null = null;
   let inputTokens = Math.max(42, Math.round((question.length + chess.fen().length) / 3));
   let outputTokens = Math.max(48, Math.round((output.answer.length + output.suggestion.length) / 3));
   let cost = 0;
 
   if (aiClient) {
-    try {
-      const moveList = game ? game.moves.map((m) => m.san).join(' ') : '';
-      const legalSample = chess
-        .moves({ verbose: true })
-        .slice(0, 14)
-        .map((m) => `${m.san} (${m.from}${m.to})`)
-        .join(', ');
+    const moveList = game ? game.moves.map((m) => m.san).join(' ') : '';
+    const legalSample = chess
+      .moves({ verbose: true })
+      .slice(0, 14)
+      .map((m) => `${m.san} (${m.from}${m.to})`)
+      .join(', ');
 
-      const prompt = [
-        'Ти ChessMind — уважний українськомовний шаховий тренер.',
-        `Поточний FEN: ${chess.fen()}`,
-        `Черга ходу: ${chess.turn() === 'w' ? 'білі' : 'чорні'}`,
-        game ? `Колір гравця: ${game.player_color === 'white' ? 'білі' : 'чорні'}` : '',
-        `Історія ходів: ${moveList || 'початкова позиція'}`,
-        `Оцінка Stockfish (${stockfishEval.source}): eval=${stockfishEval.evaluation ?? '-'} mate=${stockfishEval.mate ?? '-'} bestmove=${stockfishEval.bestmove ?? '-'}`,
-        `Доступні легальні ходи (частина): ${legalSample || 'немає'}`,
-        `Запитання гравця: ${question}`,
-        'Відповідай коротко, чітко, по позиції та українською мовою.',
-      ]
-        .filter(Boolean)
-        .join('\n');
+    const levelTone =
+      game?.level === 'beginner'
+        ? 'Гравець — початківець: пояснюй просто, як ходять і бʼють фігури, без складних термінів.'
+        : game?.level === 'advanced'
+          ? 'Гравець — високий рівень: відповідай лаконічно і точно, на рівні майстра.'
+          : 'Гравець — середній рівень: пояснюй тактичні ідеї та план гри.';
 
+    const prompt = [
+      'Ти ChessMind — уважний українськомовний шаховий тренер.',
+      levelTone,
+      `Поточний FEN: ${chess.fen()}`,
+      `Черга ходу: ${chess.turn() === 'w' ? 'білі' : 'чорні'}`,
+      game ? `Колір гравця: ${game.player_color === 'white' ? 'білі' : 'чорні'}` : '',
+      `Історія ходів: ${moveList || 'початкова позиція'}`,
+      `Оцінка Stockfish (${stockfishEval.source}): eval=${stockfishEval.evaluation ?? '-'} mate=${stockfishEval.mate ?? '-'} bestmove=${stockfishEval.bestmove ?? '-'}`,
+      `Доступні легальні ходи (частина): ${legalSample || 'немає'}`,
+      `Запитання гравця: ${question}`,
+      'Відповідай коротко, чітко, по позиції та українською мовою.',
+    ]
+      .filter(Boolean)
+      .join('\n');
+
+    const callGeminiModel = async (targetModel: string) => {
       const aiPromise = aiClient.models.generateContent({
-        model: 'gemini-4-hydrogen',
+        model: targetModel,
         contents: prompt,
         config: {
           responseMimeType: 'application/json',
@@ -1289,13 +1737,44 @@ app.post('/api/coach/explain', async (req: Request, res: Response) => {
           },
         },
       });
-
-      const aiRes = await Promise.race([
+      return Promise.race([
         aiPromise,
         new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('Gemini upstream timeout after 6000ms')), 6000),
         ),
       ]);
+    };
+
+    // Determine whether to switch to fallback model automatically
+    let chosenModel = PRIMARY_TEXT_MODEL;
+    if (autoFallback && primaryTokensUsed >= aiUsage.model_token_limit) {
+      chosenModel = FALLBACK_TEXT_MODEL;
+      fallbackUsed = true;
+      fallbackReason = `Ліміт токенів основної моделі (${aiUsage.model_token_limit}) вичерпано — переключено на ${FALLBACK_TEXT_MODEL}.`;
+      aiUsage.active_model = FALLBACK_TEXT_MODEL;
+      aiUsage.fallback_triggered_count += 1;
+      emitTelemetry('WARNING', fallbackReason, requestId, { component: 'orchestration' });
+    }
+
+    try {
+      let aiRes;
+      try {
+        aiRes = await callGeminiModel(chosenModel);
+      } catch (primaryErr) {
+        const msg = primaryErr instanceof Error ? primaryErr.message : String(primaryErr);
+        const quotaOrRateLimit = /429|RESOURCE_EXHAUSTED|quota|limit/i.test(msg);
+        if (autoFallback && chosenModel === PRIMARY_TEXT_MODEL && quotaOrRateLimit) {
+          chosenModel = FALLBACK_TEXT_MODEL;
+          fallbackUsed = true;
+          fallbackReason = `Вичерпано квоту ${PRIMARY_TEXT_MODEL} — автоматично переключено на ${FALLBACK_TEXT_MODEL}.`;
+          aiUsage.active_model = FALLBACK_TEXT_MODEL;
+          aiUsage.fallback_triggered_count += 1;
+          emitTelemetry('WARNING', fallbackReason, requestId, { component: 'orchestration' });
+          aiRes = await callGeminiModel(FALLBACK_TEXT_MODEL);
+        } else {
+          throw primaryErr;
+        }
+      }
 
       const parsed = JSON.parse(aiRes.text || '{}');
       if (parsed.answer && parsed.suggestion) {
@@ -1309,13 +1788,14 @@ app.post('/api/coach/explain', async (req: Request, res: Response) => {
         };
       }
       providerName = 'gemini';
-      modelName = 'gemini-4-hydrogen';
+      modelName = chosenModel;
       const usageMeta = aiRes.usageMetadata;
       if (usageMeta) {
         inputTokens = usageMeta.promptTokenCount ?? inputTokens;
         outputTokens = usageMeta.candidatesTokenCount ?? outputTokens;
       }
       cost = Number(((inputTokens * 0.0000001) + (outputTokens * 0.0000004)).toFixed(6));
+      recordModelUsage(chosenModel, inputTokens, outputTokens, cost);
     } catch (err) {
       emitTelemetry(
         'WARNING',
@@ -1334,18 +1814,18 @@ app.post('/api/coach/explain', async (req: Request, res: Response) => {
 
   emitTelemetry(
     'INFO',
-    `AI orchestration completed (provider=${providerName}, tokens=${inputTokens + outputTokens}, latency=${latencyMs}ms)`,
+    `AI orchestration completed (model=${modelName}, tokens=${inputTokens + outputTokens}, latency=${latencyMs}ms)`,
     requestId,
     { component: 'orchestration' },
   );
-  emitTelemetry('INFO', 'Chess service completed', requestId, { component: 'service' });
-  emitTelemetry('INFO', 'API returned assistant response', requestId, { component: 'api' });
 
   res.json({
     ...output,
     request_id: requestId,
     provider: providerName,
     model: modelName,
+    fallback_used: fallbackUsed,
+    fallback_reason: fallbackReason,
     latency_ms: latencyMs,
     input_tokens: inputTokens,
     output_tokens: outputTokens,
@@ -1729,7 +2209,170 @@ async function startServer() {
     });
   }
 
-  app.listen(port, '0.0.0.0', () => {
+  const server = http.createServer(app);
+  const gameWss = new WebSocketServer({ noServer: true });
+  const liveWss = new WebSocketServer({ noServer: true });
+
+  // WebSocket 1: Real-time chess moves (/ws/games/:gameId)
+  gameWss.on('connection', (ws: WebSocket, req: http.IncomingMessage) => {
+    const urlPath = (req.url || '').split('?')[0];
+    const gameId = decodeURIComponent(urlPath.replace('/ws/games/', ''));
+
+    ws.on('message', async (raw) => {
+      try {
+        const msg = JSON.parse(raw.toString()) as { type: string; move?: string };
+        const game = games.get(gameId);
+        if (!game) {
+          ws.send(
+            JSON.stringify({
+              type: 'error',
+              payload: {
+                kind: 'game_not_found',
+                message: 'Партію не знайдено.',
+                retryable: false,
+                request_id: crypto.randomUUID(),
+              },
+            }),
+          );
+          return;
+        }
+        if (msg.type === 'sync') {
+          ws.send(JSON.stringify({ type: 'game_state', payload: serializeGame(game) }));
+        } else if (msg.type === 'make_move' && msg.move) {
+          const reqId = crypto.randomUUID();
+          const fakeReq = { headers: { cookie: req.headers.cookie } } as Request;
+          const session = getSessionFromRequest(fakeReq);
+          const outcome = await applyMoveAndAnalyze(game, msg.move, session, reqId);
+          if (outcome.ok) {
+            ws.send(JSON.stringify({ type: 'move_applied', payload: outcome.payload }));
+          } else {
+            ws.send(JSON.stringify({ type: 'error', payload: outcome.error }));
+          }
+        }
+      } catch {
+        // Ignore invalid WS frames
+      }
+    });
+  });
+
+  // WebSocket 2: Real-time conversational voice coach (/ws/live-coach using gemini-3.8-live)
+  liveWss.on('connection', async (clientWs: WebSocket) => {
+    if (!aiClient) {
+      clientWs.send(
+        JSON.stringify({
+          type: 'error',
+          message: 'GEMINI_API_KEY не налаштований на сервері для розмовної моделі.',
+        }),
+      );
+      clientWs.close();
+      return;
+    }
+
+    let liveSession: Awaited<ReturnType<typeof aiClient.live.connect>> | null = null;
+    try {
+      liveSession = await aiClient.live.connect({
+        model: 'gemini-3.8-live',
+        config: {
+          responseModalities: [Modality.AUDIO],
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Zephyr' } },
+          },
+          systemInstruction:
+            'Ти ChessMind — дружній розмовний шаховий тренер, який спілкується українською мовою. Допомагай гравцю прямо під час партії: коротко пояснюй ідеї, помилки та правила ходу фігур. Якщо тобі надсилають контекст позиції FEN — враховуй його у відповідях.',
+        },
+        callbacks: {
+          onmessage: (message: LiveServerMessage) => {
+            const content = message.serverContent;
+            if (content?.inputTranscription?.text) {
+              clientWs.send(JSON.stringify({ inputTranscript: content.inputTranscription.text }));
+            }
+            if (content?.outputTranscription?.text) {
+              clientWs.send(JSON.stringify({ outputTranscript: content.outputTranscription.text }));
+            }
+            for (const part of content?.modelTurn?.parts ?? []) {
+              if (part.inlineData?.data) {
+                clientWs.send(JSON.stringify({ audio: part.inlineData.data }));
+              }
+            }
+            if (content?.interrupted) {
+              clientWs.send(JSON.stringify({ interrupted: true }));
+            }
+          },
+          onerror: () => {
+            clientWs.send(
+              JSON.stringify({
+                type: 'error',
+                message: 'Збій голосового каналу Gemini Live.',
+              }),
+            );
+          },
+        },
+      });
+
+      clientWs.send(JSON.stringify({ type: 'ready', model: 'gemini-3.8-live' }));
+    } catch (err) {
+      clientWs.send(
+        JSON.stringify({
+          type: 'error',
+          message: `Не вдалося запустити розмовну модель: ${err instanceof Error ? err.message : 'error'}`,
+        }),
+      );
+      clientWs.close();
+      return;
+    }
+
+    clientWs.on('message', (raw) => {
+      if (!liveSession) return;
+      try {
+        const msg = JSON.parse(raw.toString()) as {
+          type?: string;
+          audio?: string;
+          fen?: string;
+          level?: string;
+          last_mistake?: string | null;
+        };
+        if (msg.type === 'audio' && msg.audio) {
+          liveSession.sendRealtimeInput({
+            audio: { data: msg.audio, mimeType: 'audio/pcm;rate=16000' },
+          });
+        } else if (msg.type === 'context' && msg.fen) {
+          const ctxText = `Поточна позиція на шахівниці FEN: ${msg.fen}. Рівень гравця: ${msg.level ?? 'intermediate'}.${
+            msg.last_mistake ? ` Останнє зауваження Stockfish: ${msg.last_mistake}` : ''
+          }`;
+          liveSession.sendRealtimeInput({ text: ctxText });
+        }
+      } catch {
+        // Ignore malformed messages
+      }
+    });
+
+    clientWs.on('close', () => {
+      try {
+        liveSession?.close();
+      } catch {
+        // Ignore close errors
+      }
+    });
+  });
+
+  server.on('upgrade', (request, socket, head) => {
+    const pathname = (request.url || '').split('?')[0];
+    if (pathname.startsWith('/ws/games/')) {
+      gameWss.handleUpgrade(request, socket, head, (ws) => {
+        gameWss.emit('connection', ws, request);
+      });
+    } else if (pathname === '/ws/live-coach') {
+      liveWss.handleUpgrade(request, socket, head, (ws) => {
+        liveWss.emit('connection', ws, request);
+      });
+    } else {
+      socket.destroy();
+    }
+  });
+
+  server.listen(port, '0.0.0.0', () => {
     console.log(`ChessMind 3D server running on http://0.0.0.0:${port}`);
   });
 }
